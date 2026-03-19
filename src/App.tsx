@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Calculator, Upload, FileText, User, DollarSign, Calendar, Info, AlertCircle, Loader2, Save, Trash2 } from 'lucide-react';
+import { Calculator, Upload, FileText, User, DollarSign, Calendar, Info, AlertCircle, Loader2, Save, Trash2, Users, Plus, X, Printer, Search } from 'lucide-react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { auth, db, signInWithGoogle, logOut, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
@@ -15,6 +15,8 @@ type FieldConfig = {
   options?: string[];
   prefix?: string;
   readOnly?: boolean;
+  className?: string;
+  visible?: (data: Record<string, any>) => boolean;
 };
 
 const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: FieldConfig[] }[] = [
@@ -29,7 +31,7 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
       { id: 'cl-ssn', label: 'SSN', type: 'text' },
       { id: 'cl-dob', label: 'Date of Birth', type: 'date' },
       { id: 'cl-phone', label: 'Phone', type: 'text' },
-      { id: 'cl-address', label: 'Address', type: 'text' },
+      { id: 'cl-address', label: 'Address', type: 'text', className: 'col-span-1 md:col-span-2' },
       { id: 'cl-csz', label: 'City, State, Zip', type: 'text' },
       { id: 'cl-pob', label: 'Place of Birth', type: 'text' },
       { id: 'cl-mother', label: 'Mother\'s Maiden Name', type: 'text' },
@@ -47,7 +49,6 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
       { id: 'ssa-fo-fax', label: 'FO Fax', type: 'text' },
       { id: 'ssa-pc-phone', label: 'PC Phone', type: 'text' },
       { id: 'ssa-pc-fax', label: 'PC Fax', type: 'text' },
-      { id: 'office-notes', label: 'Office Notes', type: 'textarea' },
     ]
   },
   {
@@ -62,7 +63,8 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
       { id: 't2-dli', label: 'DLI', type: 'date' },
       { id: 't2-pia', label: 'PIA (Monthly)', type: 'number', prefix: '$' },
       { id: 't2-fm', label: 'Family Max', type: 'number', prefix: '$' },
-      { id: 't2-gross', label: 'T2 Gross Retro', type: 'number', prefix: '$', readOnly: true },
+      { id: 't2-retro-months', label: 'Retro Months', type: 'number', readOnly: true },
+      { id: 't2-gross', label: 'T2 Gross Retro', type: 'number', prefix: '$' },
     ]
   },
   {
@@ -97,7 +99,6 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
       { id: 't16-monthly', label: 'SSI Monthly (Optional)', type: 'number', prefix: '$' },
       { id: 't16-gross', label: 'T16 Gross Retro', type: 'number', prefix: '$' },
       { id: 't16-state-repay', label: 'State Repay', type: 'number', prefix: '$' },
-      { id: 't16-notes', label: 'T16 Notes', type: 'textarea' },
     ]
   },
   {
@@ -107,10 +108,14 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
     fields: [
       { id: 'perc-marital', label: 'Marital Status', type: 'select', options: ['Single', 'Married', 'Separated', 'Divorced', 'Widowed'] },
       { id: 'perc-pah', label: 'PAH', type: 'select', options: ['No', 'Yes'] },
-      { id: 'perc-la-type', label: 'LA Type', type: 'select', options: ['A', 'B', 'C', 'D', 'Transient'] },
+      { id: 'perc-la-type', label: 'LA Type', type: 'select', options: ['A (Own household)', 'B (Another\'s household)', 'C (Child under 18)', 'D (Institution)', 'Transient'] },
       { id: 'perc-children', label: 'Children', type: 'text' },
       { id: 'perc-family-details', label: 'Family Details', type: 'textarea' },
       { id: 'wc-offset', label: 'WC Offset', type: 'text' },
+      { id: 'perc-inheritance', label: 'Inheritance after Filing Date?', type: 'select', options: ['No', 'Yes'] },
+      { id: 'perc-inh-date', label: 'Inheritance Date', type: 'date', visible: (data) => data['perc-inheritance'] === 'Yes' },
+      { id: 'perc-inh-amount', label: 'Inheritance Amount', type: 'number', prefix: '$', visible: (data) => data['perc-inheritance'] === 'Yes' },
+      { id: 'perc-inh-spent', label: 'How Spent?', type: 'textarea', visible: (data) => data['perc-inheritance'] === 'Yes' },
       { id: 'windfall-offset', label: 'Windfall Offset', type: 'text' },
       { id: 't2-wc-monthly', label: 'T2 WC Monthly', type: 'number', prefix: '$' },
       { id: 't2-wc-settlement', label: 'T2 WC Settlement', type: 'number', prefix: '$' },
@@ -118,6 +123,14 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
       { id: 'res-bank-current', label: 'Bank Current', type: 'number', prefix: '$' },
       { id: 'inc-earned', label: 'Earned Income', type: 'number', prefix: '$' },
       { id: 'perc-va', label: 'VA Benefits', type: 'number', prefix: '$' },
+    ]
+  },
+  {
+    id: 'specialists-notes',
+    title: 'Specialists Notes',
+    icon: FileText,
+    fields: [
+      { id: 'specialist-notes-text', label: 'Specialist Notes', type: 'textarea', className: 'col-span-1 md:col-span-2' },
     ]
   }
 ];
@@ -128,7 +141,8 @@ const INITIAL_STATE: Record<string, any> = {
   'fee-petition': 'No',
   'perc-marital': 'Single',
   'perc-pah': 'No',
-  'perc-la-type': 'A',
+  'perc-la-type': 'A (Own household)',
+  'perc-inheritance': 'No',
 };
 
 function ErrorFallback({error, resetErrorBoundary}: any) {
@@ -174,16 +188,39 @@ function App() {
 
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isApproved, setIsApproved] = useState<boolean | null>(null);
   const [savedCases, setSavedCases] = useState<any[]>([]);
   const [currentCaseId, setCurrentCaseId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showLoadModal, setShowLoadModal] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
   const [caseToDelete, setCaseToDelete] = useState<string | null>(null);
+  const [allowedUsers, setAllowedUsers] = useState<any[]>([]);
+  const [newEmail, setNewEmail] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentNote, setCurrentNote] = useState('');
+
+  const isAdmin = user?.email === 'rgach@ssd-sol.com';
+
+  const handleAddNote = () => {
+    if (!currentNote.trim()) return;
+    const timestamp = new Date().toLocaleString();
+    const sectionTitle = SECTIONS.find(s => s.id === activeTab)?.title || 'Note';
+    const newNote = `[${timestamp}] ${sectionTitle}:\n${currentNote.trim()}`;
+    
+    setData(prev => {
+      const existingNotes = prev['specialist-notes-text'] || '';
+      const updatedNotes = existingNotes ? `${newNote}\n\n${existingNotes}` : newNote;
+      return { ...prev, 'specialist-notes-text': updatedNotes };
+    });
+    setCurrentNote('');
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setIsAuthReady(true);
+      if (!currentUser) setIsApproved(null);
     });
     return () => unsubscribe();
   }, []);
@@ -194,26 +231,68 @@ function App() {
       return;
     }
     
-    const q = query(collection(db, `users/${user.uid}/cases`), orderBy('updatedAt', 'desc'));
+    const q = query(collection(db, `cases`), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      setIsApproved(true);
       const cases = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
       setSavedCases(cases);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/cases`);
+      if (error.message.includes('Missing or insufficient permissions') || error.message.includes('permission_denied')) {
+        setIsApproved(false);
+      } else {
+        handleFirestoreError(error, OperationType.LIST, `cases`);
+      }
     });
 
     return () => unsubscribe();
   }, [user, isAuthReady]);
 
+  useEffect(() => {
+    if (isAdmin && showAdminModal) {
+      const q = query(collection(db, 'allowed_users'), orderBy('addedAt', 'desc'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        setAllowedUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'allowed_users');
+      });
+      return () => unsubscribe();
+    }
+  }, [isAdmin, showAdminModal]);
+
+  const handleAddUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEmail.trim() || !isAdmin) return;
+    try {
+      const email = newEmail.trim().toLowerCase();
+      await setDoc(doc(db, 'allowed_users', email), {
+        email,
+        addedBy: user.email,
+        addedAt: new Date().toISOString()
+      });
+      setNewEmail('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `allowed_users/${newEmail}`);
+    }
+  };
+
+  const handleRemoveUser = async (email: string) => {
+    if (!isAdmin) return;
+    try {
+      await deleteDoc(doc(db, 'allowed_users', email));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `allowed_users/${email}`);
+    }
+  };
+
   const handleSaveCase = async () => {
-    if (!user) return;
+    if (!user || !isApproved) return;
     setIsSaving(true);
     try {
       const caseId = currentCaseId || crypto.randomUUID();
-      const caseRef = doc(db, `users/${user.uid}/cases`, caseId);
+      const caseRef = doc(db, `cases`, caseId);
       
       const caseData = {
         ...data,
@@ -227,13 +306,13 @@ function App() {
       setData(caseData);
       alert("Case saved successfully!");
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `users/${user?.uid}/cases`);
+      handleFirestoreError(error, OperationType.WRITE, `cases`);
     } finally {
       setIsSaving(false);
     }
   };
 
-  const calculateTotals = React.useCallback(() => {
+  const calculateTotals = React.useCallback((forceRecalculate: boolean = false) => {
     const calculateMonths = (start: string, end: string) => {
       if (!start || !end) return 0;
       const d1 = new Date(start);
@@ -253,17 +332,31 @@ function App() {
     const fm = parseFloat(data['t2-fm']) || 0;
     const t16Monthly = parseFloat(data['t16-monthly']) || 0;
 
-    const t2Gross = pia * payableMonthsT2;
+    let t2Gross = parseFloat(data['t2-gross']) || 0;
+    let shouldUpdateT2Gross = false;
+
+    if (forceRecalculate || !data['t2-gross']) {
+      if (pia > 0 && payableMonthsT2 > 0) {
+        const calculatedT2Gross = pia * payableMonthsT2;
+        if (t2Gross !== calculatedT2Gross) {
+          t2Gross = calculatedT2Gross;
+          shouldUpdateT2Gross = true;
+        }
+      }
+    }
+
     const auxRetro = (fm > pia) ? (fm - pia) * payableMonthsT2 : 0;
     
     let t16Gross = parseFloat(data['t16-gross']) || 0;
     let shouldUpdateT16Gross = false;
 
-    if (t16Monthly > 0 && payableMonthsT16 > 0) {
-      const calculatedT16Gross = t16Monthly * payableMonthsT16;
-      if (t16Gross !== calculatedT16Gross) {
-        t16Gross = calculatedT16Gross;
-        shouldUpdateT16Gross = true;
+    if (forceRecalculate || !data['t16-gross']) {
+      if (t16Monthly > 0 && payableMonthsT16 > 0) {
+        const calculatedT16Gross = t16Monthly * payableMonthsT16;
+        if (t16Gross !== calculatedT16Gross) {
+          t16Gross = calculatedT16Gross;
+          shouldUpdateT16Gross = true;
+        }
       }
     }
 
@@ -294,8 +387,11 @@ function App() {
       const format = (val: number) => val > 0 ? val.toFixed(2) : '';
       const formatZero = (val: number) => val > 0 ? val.toFixed(2) : '0.00';
 
-      if (prev['t2-gross'] !== format(t2Gross)) updates['t2-gross'] = format(t2Gross);
+      if (shouldUpdateT2Gross && prev['t2-gross'] !== format(t2Gross)) {
+        updates['t2-gross'] = format(t2Gross);
+      }
       if (prev['aux-retro'] !== format(auxRetro)) updates['aux-retro'] = format(auxRetro);
+      if (prev['t2-retro-months'] !== String(payableMonthsT2 || '')) updates['t2-retro-months'] = String(payableMonthsT2 || '');
       if (prev['t16-retro-months'] !== String(payableMonthsT16 || '')) updates['t16-retro-months'] = String(payableMonthsT16 || '');
       
       if (shouldUpdateT16Gross && prev['t16-gross'] !== format(t16Gross)) {
@@ -310,17 +406,17 @@ function App() {
     });
   }, [
     data['t2-doe'], data['t16-doe'], data['notice-date'], 
-    data['t2-pia'], data['t2-fm'], data['t16-monthly'], data['t16-gross'],
+    data['t2-pia'], data['t2-fm'], data['t16-monthly'], data['t16-gross'], data['t2-gross'],
     data['fee-status'], data['fee-petition'], data['petition-amount']
   ]);
 
   // Auto-calculate fields
   useEffect(() => {
-    calculateTotals();
+    calculateTotals(false);
   }, [calculateTotals]);
 
   const handleRecalculate = () => {
-    calculateTotals();
+    calculateTotals(true);
   };
 
   const handleChange = (id: string, value: string) => {
@@ -364,6 +460,7 @@ CRITICAL INSTRUCTIONS:
 - Omit fields if the info is not present — do not guess or use $0.00 defaults.
 - DATE FORMAT: YYYY-MM-DD.
 - NUMBER FORMAT: Plain numbers only (e.g., 12500.00).
+- DO NOT extract any information for the "specialist-notes-text" field. This field is for manual user input only.
 
 CROSS-REFERENCING OFFICE DIRECTORIES & LOOKUP:
 You MUST look up the correct Field Office (FO) and Payment Center (PC) phone and fax numbers using the extracted information and put them in their respective fields:
@@ -377,9 +474,19 @@ If the total gross retroactive backpay amounts are not explicitly stated, you MU
 3. Determine payable months from Date of Entitlement (DOE) to Notice date.
 4. "t2-gross" = (PIA * payable months).
 5. "aux-retro" = ((FM - PIA) * payable months) if there are eligible dependents.
+6. "t16-gross" = (SSI Monthly * payable months) if SSI Monthly is available.
+
+SELECT FIELD EXACT VALUES:
+  "claim-type": "T2 Only" | "T16 Only" | "Concurrent"
+  "fee-status": "Approved" | "Denied"
+  "fee-petition": "No" | "Yes"
+  "perc-marital": "Single" | "Married" | "Separated" | "Divorced" | "Widowed"
+  "perc-pah": "No" | "Yes"
+  "perc-la-type": "A (Own household)" | "B (Another's household)" | "C (Child under 18)" | "D (Institution)" | "Transient"
+  "perc-inheritance": "No" | "Yes"
 
 FIELD ID MAP:
-"claim-type", "cl-first", "cl-middle", "cl-last", "cl-ssn", "cl-dob", "cl-phone", "cl-address", "cl-csz", "cl-pob", "cl-mother", "cl-father", "ssa-fo-phone", "ssa-fo-fax", "ssa-pc-phone", "ssa-pc-fax", "office-notes", "fee-status", "fee-petition", "time-del", "reason-fee-denied", "date-petition-sent", "date-petition-app", "petition-amount", "t2-filing", "t2-aod", "t2-eod", "t2-doe", "t2-dli", "t2-pia", "t2-fm", "t2-gross", "t2-fee-due", "t2-fee-paid", "wc-offset", "windfall-offset", "t2-wc-start", "t2-wc-stop", "t2-wc-monthly", "t2-wc-settlement", "t2-wc-left", "t2-wc-spent", "perc-marital", "perc-children", "perc-pah", "perc-family-details", "perc-la-type", "perc-expenses-total", "perc-expenses-claimant", "perc-la-changes", "res-cash", "res-bank-high", "res-bank-current", "res-vehicles", "res-other", "inc-earned", "inc-spouse", "perc-ltd", "perc-va", "perc-other-unearned", "perc-wc-start", "perc-wc-stop", "perc-wc-monthly", "perc-wc-settlement", "perc-wc-left", "perc-wc-spent", "perc-inh-date", "perc-inh-amount", "perc-inh-left", "perc-inh-spent", "t16-pfd", "t16-eod", "t16-doe", "t16-retro-months", "t16-gross", "t16-state-repay", "t16-fee-due", "t16-fee-paid", "t16-notes", "aux-children", "aux-num-children", "aux-retro", "aux-fee-due", "aux-fee-paid", "cdr-cease", "cdr-eod", "cdr-doe", "cdr-retro", "notice-date"`
+"claim-type", "cl-first", "cl-middle", "cl-last", "cl-ssn", "cl-dob", "cl-phone", "cl-address", "cl-csz", "cl-pob", "cl-mother", "cl-father", "ssa-fo-phone", "ssa-fo-fax", "ssa-pc-phone", "ssa-pc-fax", "fee-status", "fee-petition", "time-del", "reason-fee-denied", "date-petition-sent", "date-petition-app", "petition-amount", "t2-filing", "t2-aod", "t2-eod", "t2-doe", "t2-dli", "t2-pia", "t2-fm", "t2-retro-months", "t2-gross", "t2-fee-due", "t2-fee-paid", "wc-offset", "windfall-offset", "t2-wc-start", "t2-wc-stop", "t2-wc-monthly", "t2-wc-settlement", "t2-wc-left", "t2-wc-spent", "perc-marital", "perc-children", "perc-pah", "perc-family-details", "perc-la-type", "perc-expenses-total", "perc-expenses-claimant", "perc-la-changes", "res-cash", "res-bank-high", "res-bank-current", "res-vehicles", "res-other", "inc-earned", "inc-spouse", "perc-ltd", "perc-va", "perc-other-unearned", "perc-wc-start", "perc-wc-stop", "perc-wc-monthly", "perc-wc-settlement", "perc-wc-left", "perc-wc-spent", "perc-inheritance", "perc-inh-date", "perc-inh-amount", "perc-inh-left", "perc-inh-spent", "t16-pfd", "t16-eod", "t16-doe", "t16-retro-months", "t16-gross", "t16-state-repay", "t16-fee-due", "t16-fee-paid", "aux-children", "aux-num-children", "aux-retro", "aux-fee-due", "aux-fee-paid", "cdr-cease", "cdr-eod", "cdr-doe", "cdr-retro", "notice-date"`
       });
 
       const response = await ai.models.generateContent({
@@ -423,7 +530,7 @@ FIELD ID MAP:
               value={value}
               onChange={(e) => handleChange(field.id, e.target.value)}
               disabled={field.readOnly}
-              className={`w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 ${field.readOnly ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+              className={`w-full border border-slate-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${field.readOnly ? 'bg-slate-50 cursor-not-allowed' : ''}`}
             >
               <option value="">Select...</option>
               {field.options?.map(opt => (
@@ -437,7 +544,7 @@ FIELD ID MAP:
               onChange={(e) => handleChange(field.id, e.target.value)}
               readOnly={field.readOnly}
               rows={3}
-              className={`w-full border border-slate-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 ${field.readOnly ? 'bg-slate-50 cursor-not-allowed' : 'bg-white'}`}
+              className={`w-full border border-slate-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${field.readOnly ? 'bg-slate-50 cursor-not-allowed' : 'bg-white'}`}
             />
           ) : (
             <input
@@ -446,7 +553,7 @@ FIELD ID MAP:
               value={value}
               onChange={(e) => handleChange(field.id, e.target.value)}
               readOnly={field.readOnly}
-              className={`w-full border border-slate-300 rounded-md px-3 py-2 ${field.prefix ? 'pl-8' : ''} ${field.readOnly ? 'bg-slate-50 cursor-not-allowed text-slate-600 font-medium' : 'bg-white'} focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500`}
+              className={`w-full border border-slate-300 rounded-md px-3 py-2 ${field.prefix ? 'pl-8' : ''} ${field.readOnly ? 'bg-slate-50 cursor-not-allowed text-slate-600 font-medium' : 'bg-white'} focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500`}
             />
           )}
         </div>
@@ -462,13 +569,13 @@ FIELD ID MAP:
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-lg">
+            <div className="bg-blue-600 p-2 rounded-lg">
               <Calculator className="w-5 h-5 text-white" />
             </div>
             <h1 className="text-xl font-semibold tracking-tight">SSD Benefits Calculator</h1>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 print:hidden">
             <input 
               type="file" 
               multiple
@@ -478,16 +585,23 @@ FIELD ID MAP:
               accept=".pdf,.png,.jpg,.jpeg,.csv" 
             />
             <button
+              onClick={() => window.print()}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-md font-medium transition-colors"
+            >
+              <Printer className="w-4 h-4" />
+              <span className="hidden sm:inline">Print</span>
+            </button>
+            <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isExtracting}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-md font-medium transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-md font-medium transition-colors disabled:opacity-50"
             >
               {isExtracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
               {isExtracting ? 'Extracting...' : 'Upload Document(s)'}
             </button>
             <button 
               onClick={handleRecalculate}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-md font-medium transition-colors"
+              className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-md font-medium transition-colors"
             >
               <Calculator className="w-4 h-4" />
               Recalculate
@@ -497,46 +611,59 @@ FIELD ID MAP:
                 setData(INITIAL_STATE);
                 setCurrentCaseId(null);
               }}
-              className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-md font-medium transition-colors"
+              className="px-4 py-2 border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-md font-medium transition-colors"
             >
               Clear All
             </button>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 print:hidden">
             {user ? (
               <>
+                {isAdmin && (
+                  <button
+                    onClick={() => setShowAdminModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-md font-medium transition-colors"
+                  >
+                    <Users className="w-4 h-4" />
+                    Team
+                  </button>
+                )}
                 <div className="flex items-center gap-2 mr-4 border-r border-slate-200 pr-4">
                   {user.photoURL ? (
-                    <img src={user.photoURL} alt="Avatar" className="w-8 h-8 rounded-full bg-slate-200" />
+                    <img src={user.photoURL} alt="Avatar" className="w-8 h-8 rounded-full bg-slate-200" referrerPolicy="no-referrer" />
                   ) : (
-                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold">
                       {user.displayName?.charAt(0) || 'U'}
                     </div>
                   )}
                   <div className="text-sm">
                     <p className="font-medium text-slate-900 leading-none">{user.displayName}</p>
-                    <button onClick={logOut} className="text-xs text-slate-500 hover:text-slate-700">Sign out</button>
+                    <button onClick={logOut} className="text-xs text-blue-500 hover:text-blue-700">Sign out</button>
                   </div>
                 </div>
-                <button 
-                  onClick={() => setShowLoadModal(true)}
-                  className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-md font-medium transition-colors"
-                >
-                  Load Case
-                </button>
-                <button 
-                  onClick={handleSaveCase}
-                  disabled={isSaving}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md font-medium transition-colors disabled:opacity-50"
-                >
-                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                  Save Case
-                </button>
+                {isApproved && (
+                  <>
+                    <button 
+                      onClick={() => setShowLoadModal(true)}
+                      className="px-4 py-2 border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-md font-medium transition-colors"
+                    >
+                      Load Case
+                    </button>
+                    <button 
+                      onClick={handleSaveCase}
+                      disabled={isSaving}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-md font-medium transition-colors disabled:opacity-50"
+                    >
+                      {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Save Case
+                    </button>
+                  </>
+                )}
               </>
             ) : (
               <button 
                 onClick={signInWithGoogle}
-                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-md font-medium transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-md font-medium transition-colors"
               >
                 Sign in to Save
               </button>
@@ -546,7 +673,7 @@ FIELD ID MAP:
       </header>
 
       {/* Quick Summary Bar */}
-      <div className="bg-white border-b border-slate-200 sticky top-16 z-10 shadow-sm">
+      <div className="bg-white border-b border-slate-200 sticky top-16 z-10 shadow-sm print:hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-6">
@@ -577,6 +704,16 @@ FIELD ID MAP:
                     {data['aux-retro'] ? `$${data['aux-retro']}` : '$0.00'}
                   </p>
                 </div>
+                <div>
+                  <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Specialist</p>
+                  <input
+                    type="text"
+                    value={data['specialist'] || ''}
+                    onChange={(e) => handleChange('specialist', e.target.value)}
+                    placeholder="Enter name"
+                    className="text-sm font-medium bg-transparent border-b border-slate-300 focus:border-blue-500 focus:outline-none w-32 pb-0.5"
+                  />
+                </div>
                 {data['fee-status'] !== 'Approved' && (
                   <div className="bg-red-50 px-3 py-1 rounded border border-red-200 flex items-center">
                     <span className="text-red-600 font-bold text-sm">Fee Petition Needed</span>
@@ -584,9 +721,9 @@ FIELD ID MAP:
                 )}
               </div>
             </div>
-            <div className="bg-indigo-50 px-4 py-1.5 rounded-md border border-indigo-100 flex items-center gap-3">
-              <p className="text-[10px] text-indigo-600 uppercase tracking-wider font-semibold">Total Fee Due</p>
-              <p className="text-base font-mono font-bold text-indigo-700">
+            <div className="bg-blue-50 px-4 py-1.5 rounded-md border border-blue-100 flex items-center gap-3">
+              <p className="text-[10px] text-blue-600 uppercase tracking-wider font-semibold">Total Fee Due</p>
+              <p className="text-base font-mono font-bold text-blue-700">
                 ${((parseFloat(data['t2-fee-due']) || 0) + (parseFloat(data['t16-fee-due']) || 0) + (parseFloat(data['aux-fee-due']) || 0)).toFixed(2)}
               </p>
             </div>
@@ -595,6 +732,16 @@ FIELD ID MAP:
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {user && isApproved === false && (
+          <div className="mb-8 bg-amber-50 border border-amber-200 rounded-xl p-6 text-center">
+            <AlertCircle className="w-8 h-8 text-amber-500 mx-auto mb-3" />
+            <h2 className="text-lg font-semibold text-amber-900 mb-2">Access Pending</h2>
+            <p className="text-amber-700 max-w-md mx-auto">
+              Your email ({user.email}) has not been approved to access the shared workspace yet. Please contact your administrator to be added to the approved users list.
+            </p>
+          </div>
+        )}
+
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 text-red-800">
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
@@ -605,9 +752,9 @@ FIELD ID MAP:
           </div>
         )}
 
-        <div className="flex flex-col md:flex-row gap-8">
+        <div className={`flex flex-col md:flex-row gap-8 ${user && isApproved === false ? 'opacity-50 pointer-events-none' : ''}`}>
           {/* Sidebar Navigation */}
-          <aside className="w-full md:w-64 shrink-0">
+          <aside className="w-full md:w-64 shrink-0 print:hidden">
             <nav className="flex flex-col gap-1">
               {SECTIONS.map(section => {
                 const Icon = section.icon;
@@ -615,14 +762,17 @@ FIELD ID MAP:
                 return (
                   <button
                     key={section.id}
-                    onClick={() => setActiveTab(section.id)}
+                    onClick={() => {
+                      setActiveTab(section.id);
+                      setCurrentNote('');
+                    }}
                     className={`flex items-center gap-3 px-4 py-3 rounded-lg text-left font-medium transition-colors ${
                       isActive 
-                        ? 'bg-indigo-50 text-indigo-700' 
-                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                        ? 'bg-blue-50 text-blue-700' 
+                        : 'text-slate-600 hover:bg-blue-50 hover:text-blue-900'
                     }`}
                   >
-                    <Icon className={`w-5 h-5 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
+                    <Icon className={`w-5 h-5 ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
                     {section.title}
                   </button>
                 );
@@ -642,12 +792,39 @@ FIELD ID MAP:
               
               <div className="p-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
-                  {activeSection?.fields.map(field => (
-                    <div key={field.id} className={field.type === 'textarea' ? 'col-span-1 md:col-span-2 lg:col-span-3' : ''}>
-                      {renderField(field)}
-                    </div>
-                  ))}
+                  {activeSection?.fields.map(field => {
+                    if (field.visible && !field.visible(data)) return null;
+                    return (
+                      <div key={field.id} className={field.type === 'textarea' ? 'col-span-1 md:col-span-2 lg:col-span-3' : (field.className || '')}>
+                        {renderField(field)}
+                      </div>
+                    );
+                  })}
                 </div>
+
+                {activeSection?.id !== 'specialists-notes' && (
+                  <div className="mt-8 pt-6 border-t border-slate-200">
+                    <h3 className="text-sm font-medium text-slate-700 mb-3">Notes</h3>
+                    <div className="flex flex-col gap-3">
+                      <textarea
+                        value={currentNote}
+                        onChange={(e) => setCurrentNote(e.target.value)}
+                        placeholder={`Add a note about ${activeSection?.title}...`}
+                        rows={3}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                      <div className="flex justify-end">
+                        <button
+                          onClick={handleAddNote}
+                          disabled={!currentNote.trim()}
+                          className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-md font-medium transition-colors disabled:opacity-50"
+                        >
+                          Add Note
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -656,16 +833,36 @@ FIELD ID MAP:
 
       {/* Load Modal */}
       {showLoadModal && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4 print:hidden">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
             <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
               <h2 className="text-lg font-semibold text-slate-800">Load Saved Case</h2>
             </div>
+            <div className="p-4 border-b border-slate-200">
+              <div className="relative">
+                <Search className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search by name or SSN..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+            </div>
             <div className="p-4 overflow-y-auto flex-1 space-y-2">
-              {savedCases.length === 0 ? (
+              {savedCases.filter(c => 
+                (c['cl-first']?.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                (c['cl-last']?.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                (c['cl-ssn']?.includes(searchQuery))
+              ).length === 0 ? (
                 <p className="text-slate-500 text-sm text-center py-8">No saved cases found.</p>
               ) : (
-                savedCases.map(c => (
+                savedCases.filter(c => 
+                  (c['cl-first']?.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                  (c['cl-last']?.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                  (c['cl-ssn']?.includes(searchQuery))
+                ).map(c => (
                   <div key={c.id} className="flex items-center gap-2">
                     <button
                       onClick={() => {
@@ -673,7 +870,7 @@ FIELD ID MAP:
                         setCurrentCaseId(c.id);
                         setShowLoadModal(false);
                       }}
-                      className="flex-1 text-left px-4 py-3 rounded-lg border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
+                      className="flex-1 text-left px-4 py-3 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-colors"
                     >
                       <div className="font-medium text-slate-900">
                         {c['cl-first'] || 'Unknown'} {c['cl-last'] || 'Claimant'} {c['cl-ssn'] ? `(${c['cl-ssn']})` : ''}
@@ -699,7 +896,7 @@ FIELD ID MAP:
             <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end">
               <button
                 onClick={() => setShowLoadModal(false)}
-                className="px-4 py-2 text-slate-600 hover:bg-slate-200 bg-slate-100 rounded-md font-medium transition-colors"
+                className="px-4 py-2 text-blue-600 hover:bg-blue-200 bg-blue-100 rounded-md font-medium transition-colors"
               >
                 Cancel
               </button>
@@ -717,7 +914,7 @@ FIELD ID MAP:
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setCaseToDelete(null)}
-                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-md font-medium transition-colors"
+                className="px-4 py-2 text-blue-600 hover:bg-blue-100 rounded-md font-medium transition-colors"
               >
                 Cancel
               </button>
@@ -725,13 +922,13 @@ FIELD ID MAP:
                 onClick={async () => {
                   if (!user) return;
                   try {
-                    await deleteDoc(doc(db, `users/${user.uid}/cases`, caseToDelete));
+                    await deleteDoc(doc(db, `cases`, caseToDelete));
                     if (currentCaseId === caseToDelete) {
                       setData(INITIAL_STATE);
                       setCurrentCaseId(null);
                     }
                   } catch (error) {
-                    handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/cases/${caseToDelete}`);
+                    handleFirestoreError(error, OperationType.DELETE, `cases/${caseToDelete}`);
                   } finally {
                     setCaseToDelete(null);
                   }
@@ -740,6 +937,69 @@ FIELD ID MAP:
               >
                 Delete
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Modal */}
+      {showAdminModal && isAdmin && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4 print:hidden">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
+            <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+              <h2 className="text-lg font-semibold text-slate-800">Manage Team Access</h2>
+              <button onClick={() => setShowAdminModal(false)} className="text-blue-400 hover:text-blue-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-4 border-b border-slate-200">
+              <form onSubmit={handleAddUser} className="flex gap-2">
+                <input
+                  type="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  placeholder="Enter email address"
+                  className="flex-1 px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  required
+                />
+                <button
+                  type="submit"
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-md font-medium transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add
+                </button>
+              </form>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1 space-y-2">
+              <h3 className="text-sm font-medium text-slate-500 mb-3 uppercase tracking-wider">Authorized Users</h3>
+              {allowedUsers.length === 0 ? (
+                <p className="text-slate-500 text-sm text-center py-4">No other users authorized yet.</p>
+              ) : (
+                allowedUsers.map(u => (
+                  <div key={u.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                    <div>
+                      <div className="font-medium text-slate-900">{u.email}</div>
+                      <div className="text-xs text-slate-500">Added: {new Date(u.addedAt).toLocaleDateString()}</div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await deleteDoc(doc(db, 'allowed_users', u.id));
+                        } catch (error) {
+                          handleFirestoreError(error, OperationType.DELETE, `allowed_users/${u.id}`);
+                        }
+                      }}
+                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                      title="Remove Access"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

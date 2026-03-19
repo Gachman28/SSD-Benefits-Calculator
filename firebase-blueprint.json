@@ -1,5 +1,16 @@
 {
   "entities": {
+    "AllowedUser": {
+      "title": "Allowed User",
+      "description": "An email address approved to access the shared workspace.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "addedBy": { "type": "string" },
+        "addedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "addedBy", "addedAt"]
+    },
     "Case": {
       "title": "Case",
       "description": "A Social Security Disability case record.",
@@ -103,9 +114,13 @@
     }
   },
   "firestore": {
-    "/users/{userId}/cases/{caseId}": {
+    "/allowed_users/{email}": {
+      "schema": { "$ref": "#/entities/AllowedUser" },
+      "description": "Emails approved to access the shared workspace."
+    },
+    "/cases/{caseId}": {
       "schema": { "$ref": "#/entities/Case" },
-      "description": "User's individual SSD cases."
+      "description": "Shared SSD cases."
     }
   }
 }

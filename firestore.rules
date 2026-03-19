@@ -6,13 +6,20 @@ service cloud.firestore {
     // Assumed Data Model
     // ===============================================================
     //
-    // Collection: /users/{userId}/cases/{caseId}
+    // Collection: /cases/{caseId}
     // Document ID: Auto-generated
     // Fields:
-    //   - userId: string (required, immutable) - The ID of the user who owns this case.
+    //   - userId: string (required, immutable) - The ID of the user who created this case.
     //   - createdAt: string (required, immutable) - Creation timestamp (ISO 8601).
     //   - updatedAt: string (required) - Last update timestamp (ISO 8601).
     //   - [All other fields are optional strings]
+    //
+    // Collection: /allowed_users/{email}
+    // Document ID: User's email address
+    // Fields:
+    //   - email: string (required)
+    //   - addedBy: string (required)
+    //   - addedAt: string (required)
     //
     // ===============================================================
 
@@ -25,14 +32,19 @@ service cloud.firestore {
        return request.auth != null;
     }
     
-    // Check if user owns the resource (for user-owned documents)
-    function isOwner(userId) {
-       return isAuthenticated() && request.auth.uid == userId;
+    // Check if user is the default admin
+    function isAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.email == "rgach@ssd-sol.com" && 
+             request.auth.token.email_verified == true;
     }
-    
-    // Check if user is owner based on document's userId field
-    function isDocOwner() {
-       return isAuthenticated() && request.auth.uid == resource.data.userId;
+
+    // Check if user is approved (is admin or exists in allowed_users)
+    function isApprovedUser() {
+      return isAuthenticated() && (
+        isAdmin() || 
+        exists(/databases/$(database)/documents/allowed_users/$(request.auth.token.email))
+      );
     }
     
     // Verify userId hasn't been tampered with on create
@@ -90,21 +102,34 @@ service cloud.firestore {
              // For brevity in this prototype, we validate the most critical/largest ones.
     }
 
+    function isValidAllowedUser() {
+      return hasRequiredFields(['email', 'addedBy', 'addedAt']) &&
+             request.resource.data.email is string &&
+             request.resource.data.email.size() > 0 &&
+             request.resource.data.email.size() < 200 &&
+             request.resource.data.addedBy is string &&
+             isValidDateString(request.resource.data.addedAt);
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
 
-    match /users/{userId}/cases/{caseId} {
-      allow read: if isOwner(userId);
-      allow create: if isOwner(userId) && 
+    match /allowed_users/{email} {
+      allow read: if isApprovedUser();
+      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidAllowedUser());
+    }
+
+    match /cases/{caseId} {
+      allow read: if isApprovedUser();
+      allow create: if isApprovedUser() && 
                        isValidCase() && 
                        userIdUnchanged();
-      allow update: if isOwner(userId) && 
-                       isDocOwner() &&
+      allow update: if isApprovedUser() && 
                        isValidCase() && 
                        userIdNotModified() &&
                        request.resource.data.createdAt == resource.data.createdAt; // Immutable
-      allow delete: if isOwner(userId) && isDocOwner();
+      allow delete: if isApprovedUser();
     }
   }
 }
