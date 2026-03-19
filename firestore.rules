@@ -1,0 +1,109 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}/cases/{caseId}
+    // Document ID: Auto-generated
+    // Fields:
+    //   - userId: string (required, immutable) - The ID of the user who owns this case.
+    //   - createdAt: string (required, immutable) - Creation timestamp (ISO 8601).
+    //   - updatedAt: string (required) - Last update timestamp (ISO 8601).
+    //   - [All other fields are optional strings]
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    // Check if the user is authenticated
+    function isAuthenticated() {
+       return request.auth != null;
+    }
+    
+    // Check if user owns the resource (for user-owned documents)
+    function isOwner(userId) {
+       return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Check if user is owner based on document's userId field
+    function isDocOwner() {
+       return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+    
+    // Verify userId hasn't been tampered with on create
+    function userIdUnchanged() {
+       return !('userId' in request.resource.data) ||
+         request.resource.data.userId == request.auth.uid;
+    }
+    
+    // Ensure userId field is not modified on update
+    function userIdNotModified() {
+       return !('userId' in request.resource.data) ||
+         request.resource.data.userId == resource.data.userId;
+    }
+    
+    // Validate required fields exist
+    function hasRequiredFields(fields) {
+       return request.resource.data.keys().hasAll(fields);
+    }
+    
+    // Validate ISO 8601 date string format (YYYY-MM-DDTHH:MM:SS)
+    function isValidDateString(dateStr) {
+      return dateStr is string &&
+        dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // Validate optional string (if present, must be string and within length)
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+             (request.resource.data[field] is string &&
+              request.resource.data[field].size() >= minLen &&
+              request.resource.data[field].size() <= maxLen);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    
+    function isValidCase() {
+      return hasRequiredFields(['userId', 'createdAt', 'updatedAt']) &&
+             request.resource.data.userId is string &&
+             request.resource.data.userId.size() > 0 &&
+             request.resource.data.userId.size() < 100 &&
+             isValidDateString(request.resource.data.createdAt) &&
+             isValidDateString(request.resource.data.updatedAt) &&
+             // Ensure no massive strings are uploaded (limit to 100,000 chars for notes, 1000 for others)
+             isValidOptionalString('office-notes', 0, 100000) &&
+             isValidOptionalString('t16-notes', 0, 100000) &&
+             isValidOptionalString('perc-family-details', 0, 100000) &&
+             isValidOptionalString('claim-type', 0, 1000) &&
+             isValidOptionalString('cl-first', 0, 1000) &&
+             isValidOptionalString('cl-last', 0, 1000) &&
+             isValidOptionalString('cl-ssn', 0, 1000);
+             // Note: In a production app, we would validate EVERY optional field's size.
+             // For brevity in this prototype, we validate the most critical/largest ones.
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId}/cases/{caseId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && 
+                       isValidCase() && 
+                       userIdUnchanged();
+      allow update: if isOwner(userId) && 
+                       isDocOwner() &&
+                       isValidCase() && 
+                       userIdNotModified() &&
+                       request.resource.data.createdAt == resource.data.createdAt; // Immutable
+      allow delete: if isOwner(userId) && isDocOwner();
+    }
+  }
+}

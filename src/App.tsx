@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Calculator, Upload, FileText, User, DollarSign, Calendar, Info, AlertCircle, Loader2 } from 'lucide-react';
+import { Calculator, Upload, FileText, User, DollarSign, Calendar, Info, AlertCircle, Loader2, Save } from 'lucide-react';
 import { GoogleGenAI, Type } from '@google/genai';
+import { auth, db, signInWithGoogle, logOut, handleFirestoreError, OperationType } from './firebase';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { collection, doc, setDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { ErrorBoundary } from 'react-error-boundary';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -126,12 +130,106 @@ const INITIAL_STATE: Record<string, any> = {
   'perc-la-type': 'A',
 };
 
-export default function App() {
+function ErrorFallback({error, resetErrorBoundary}: any) {
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-red-200 max-w-lg w-full">
+        <div className="flex items-center gap-3 text-red-600 mb-4">
+          <AlertCircle className="w-6 h-6" />
+          <h2 className="text-lg font-semibold">Something went wrong</h2>
+        </div>
+        <p className="text-slate-600 mb-4 text-sm">An unexpected error occurred in the application.</p>
+        <pre className="bg-slate-100 p-4 rounded-lg text-xs overflow-auto text-slate-800 max-h-64">
+          {error.message}
+        </pre>
+        <button 
+          onClick={resetErrorBoundary}
+          className="mt-6 px-4 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-md font-medium transition-colors w-full"
+        >
+          Reload Application
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function AppWrapper() {
+  return (
+    <ErrorBoundary
+      FallbackComponent={ErrorFallback}
+      onReset={() => window.location.reload()}
+    >
+      <App />
+    </ErrorBoundary>
+  );
+}
+
+function App() {
   const [data, setData] = useState<Record<string, any>>(INITIAL_STATE);
   const [activeTab, setActiveTab] = useState(SECTIONS[0].id);
   const [isExtracting, setIsExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [savedCases, setSavedCases] = useState<any[]>([]);
+  const [currentCaseId, setCurrentCaseId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showLoadModal, setShowLoadModal] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthReady || !user) {
+      setSavedCases([]);
+      return;
+    }
+    
+    const q = query(collection(db, `users/${user.uid}/cases`), orderBy('updatedAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const cases = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setSavedCases(cases);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/cases`);
+    });
+
+    return () => unsubscribe();
+  }, [user, isAuthReady]);
+
+  const handleSaveCase = async () => {
+    if (!user) return;
+    setIsSaving(true);
+    try {
+      const caseId = currentCaseId || crypto.randomUUID();
+      const caseRef = doc(db, `users/${user.uid}/cases`, caseId);
+      
+      const caseData = {
+        ...data,
+        userId: user.uid,
+        updatedAt: new Date().toISOString(),
+        createdAt: currentCaseId ? data.createdAt : new Date().toISOString()
+      };
+      
+      await setDoc(caseRef, caseData);
+      setCurrentCaseId(caseId);
+      setData(caseData);
+      alert("Case saved successfully!");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${user?.uid}/cases`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const calculateTotals = React.useCallback(() => {
     const calculateMonths = (start: string, end: string) => {
@@ -393,11 +491,54 @@ FIELD ID MAP:
               Recalculate
             </button>
             <button 
-              onClick={() => setData(INITIAL_STATE)}
+              onClick={() => {
+                setData(INITIAL_STATE);
+                setCurrentCaseId(null);
+              }}
               className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-md font-medium transition-colors"
             >
               Clear All
             </button>
+          </div>
+          <div className="flex items-center gap-4">
+            {user ? (
+              <>
+                <div className="flex items-center gap-2 mr-4 border-r border-slate-200 pr-4">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="Avatar" className="w-8 h-8 rounded-full bg-slate-200" />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold">
+                      {user.displayName?.charAt(0) || 'U'}
+                    </div>
+                  )}
+                  <div className="text-sm">
+                    <p className="font-medium text-slate-900 leading-none">{user.displayName}</p>
+                    <button onClick={logOut} className="text-xs text-slate-500 hover:text-slate-700">Sign out</button>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowLoadModal(true)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-md font-medium transition-colors"
+                >
+                  Load Case
+                </button>
+                <button 
+                  onClick={handleSaveCase}
+                  disabled={isSaving}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md font-medium transition-colors disabled:opacity-50"
+                >
+                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save Case
+                </button>
+              </>
+            ) : (
+              <button 
+                onClick={signInWithGoogle}
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-md font-medium transition-colors"
+              >
+                Sign in to Save
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -505,6 +646,49 @@ FIELD ID MAP:
           </div>
         </div>
       </main>
+
+      {/* Load Modal */}
+      {showLoadModal && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
+            <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+              <h2 className="text-lg font-semibold text-slate-800">Load Saved Case</h2>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 space-y-2">
+              {savedCases.length === 0 ? (
+                <p className="text-slate-500 text-sm text-center py-8">No saved cases found.</p>
+              ) : (
+                savedCases.map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setData(c);
+                      setCurrentCaseId(c.id);
+                      setShowLoadModal(false);
+                    }}
+                    className="w-full text-left px-4 py-3 rounded-lg border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
+                  >
+                    <div className="font-medium text-slate-900">
+                      {c['cl-first'] || 'Unknown'} {c['cl-last'] || 'Claimant'} {c['cl-ssn'] ? `(${c['cl-ssn']})` : ''}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      Updated: {new Date(c.updatedAt).toLocaleDateString()}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end">
+              <button
+                onClick={() => setShowLoadModal(false)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-200 bg-slate-100 rounded-md font-medium transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
