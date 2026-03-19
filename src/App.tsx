@@ -45,8 +45,11 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
     fields: [
       { id: 'claim-type', label: 'Claim Type', type: 'select', options: ['T2 Only', 'T16 Only', 'Concurrent'] },
       { id: 'notice-date', label: 'Notice Date', type: 'date' },
+      { id: 'stage-approved', label: 'Stage Approved', type: 'select', options: ['Initial', 'Recon', 'Hearing', 'AC', 'Federal'] },
+      { id: 'ssa-fo-name', label: 'FO Name', type: 'text' },
       { id: 'ssa-fo-phone', label: 'FO Phone', type: 'text' },
       { id: 'ssa-fo-fax', label: 'FO Fax', type: 'text' },
+      { id: 'ssa-pc-name', label: 'PC Name', type: 'text' },
       { id: 'ssa-pc-phone', label: 'PC Phone', type: 'text' },
       { id: 'ssa-pc-fax', label: 'PC Fax', type: 'text' },
     ]
@@ -111,18 +114,19 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
       { id: 'perc-la-type', label: 'LA Type', type: 'select', options: ['A (Own household)', 'B (Another\'s household)', 'C (Child under 18)', 'D (Institution)', 'Transient'] },
       { id: 'perc-children', label: 'Children', type: 'text' },
       { id: 'perc-family-details', label: 'Family Details', type: 'textarea' },
-      { id: 'wc-offset', label: 'WC Offset', type: 'text' },
-      { id: 'perc-inheritance', label: 'Inheritance after Filing Date?', type: 'select', options: ['No', 'Yes'] },
+      { id: 'perc-inheritance', label: 'Did you receive an Inheritance after the filing date', type: 'select', options: ['No', 'Yes'] },
       { id: 'perc-inh-date', label: 'Inheritance Date', type: 'date', visible: (data) => data['perc-inheritance'] === 'Yes' },
       { id: 'perc-inh-amount', label: 'Inheritance Amount', type: 'number', prefix: '$', visible: (data) => data['perc-inheritance'] === 'Yes' },
       { id: 'perc-inh-spent', label: 'How Spent?', type: 'textarea', visible: (data) => data['perc-inheritance'] === 'Yes' },
-      { id: 'windfall-offset', label: 'Windfall Offset', type: 'text' },
-      { id: 't2-wc-monthly', label: 'T2 WC Monthly', type: 'number', prefix: '$' },
-      { id: 't2-wc-settlement', label: 'T2 WC Settlement', type: 'number', prefix: '$' },
+      { id: 'perc-wc-after-aod', label: 'Did you receive WC after the AOD?', type: 'select', options: ['No', 'Yes'] },
+      { id: 't2-wc-monthly', label: 'T2 WC Monthly', type: 'number', prefix: '$', visible: (data) => data['perc-wc-after-aod'] === 'Yes' },
+      { id: 't2-wc-settlement', label: 'T2 WC Settlement', type: 'number', prefix: '$', visible: (data) => data['perc-wc-after-aod'] === 'Yes' },
       { id: 'res-cash', label: 'Cash', type: 'number', prefix: '$' },
       { id: 'res-bank-current', label: 'Bank Current', type: 'number', prefix: '$' },
       { id: 'inc-earned', label: 'Earned Income', type: 'number', prefix: '$' },
       { id: 'perc-va', label: 'VA Benefits', type: 'number', prefix: '$' },
+      { id: 'windfall-offset', label: 'Windfall Offset', type: 'text' },
+      { id: 'wc-offset', label: 'WC Offset', type: 'text' },
     ]
   },
   {
@@ -143,6 +147,7 @@ const INITIAL_STATE: Record<string, any> = {
   'perc-pah': 'No',
   'perc-la-type': 'A (Own household)',
   'perc-inheritance': 'No',
+  'perc-wc-after-aod': 'No',
 };
 
 function ErrorFallback({error, resetErrorBoundary}: any) {
@@ -205,13 +210,23 @@ function App() {
   const handleAddNote = () => {
     if (!currentNote.trim()) return;
     const timestamp = new Date().toLocaleString();
-    const sectionTitle = SECTIONS.find(s => s.id === activeTab)?.title || 'Note';
+    const activeSection = SECTIONS.find(s => s.id === activeTab);
+    const sectionTitle = activeSection?.title || 'Note';
     const newNote = `[${timestamp}] ${sectionTitle}:\n${currentNote.trim()}`;
     
     setData(prev => {
       const existingNotes = prev['specialist-notes-text'] || '';
       const updatedNotes = existingNotes ? `${newNote}\n\n${existingNotes}` : newNote;
-      return { ...prev, 'specialist-notes-text': updatedNotes };
+      
+      const sectionNotesId = `${activeTab}-notes`;
+      const existingSectionNotes = prev[sectionNotesId] || '';
+      const updatedSectionNotes = existingSectionNotes ? `${newNote}\n\n${existingSectionNotes}` : newNote;
+      
+      return { 
+        ...prev, 
+        'specialist-notes-text': updatedNotes,
+        [sectionNotesId]: updatedSectionNotes
+      };
     });
     setCurrentNote('');
   };
@@ -331,6 +346,7 @@ function App() {
     const pia = parseFloat(data['t2-pia']) || 0;
     const fm = parseFloat(data['t2-fm']) || 0;
     const t16Monthly = parseFloat(data['t16-monthly']) || 0;
+    const auxNumChildren = parseInt(data['aux-num-children']) || 0;
 
     let t2Gross = parseFloat(data['t2-gross']) || 0;
     let shouldUpdateT2Gross = false;
@@ -345,7 +361,7 @@ function App() {
       }
     }
 
-    const auxRetro = (fm > pia) ? (fm - pia) * payableMonthsT2 : 0;
+    const auxRetro = (fm > pia && auxNumChildren > 0) ? (fm - pia) * payableMonthsT2 : 0;
     
     let t16Gross = parseFloat(data['t16-gross']) || 0;
     let shouldUpdateT16Gross = false;
@@ -407,7 +423,7 @@ function App() {
   }, [
     data['t2-doe'], data['t16-doe'], data['notice-date'], 
     data['t2-pia'], data['t2-fm'], data['t16-monthly'], data['t16-gross'], data['t2-gross'],
-    data['fee-status'], data['fee-petition'], data['petition-amount']
+    data['fee-status'], data['fee-petition'], data['petition-amount'], data['aux-num-children']
   ]);
 
   // Auto-calculate fields
@@ -463,9 +479,9 @@ CRITICAL INSTRUCTIONS:
 - DO NOT extract any information for the "specialist-notes-text" field. This field is for manual user input only.
 
 CROSS-REFERENCING OFFICE DIRECTORIES & LOOKUP:
-You MUST look up the correct Field Office (FO) and Payment Center (PC) phone and fax numbers using the extracted information and put them in their respective fields:
-- Field Office (ssa-fo-phone, ssa-fo-fax): Use the claimant's ZIP code to find the local FO phone and fax numbers. If directories are uploaded, use them. Otherwise, use Google Search to find the SSA Field Office phone and fax numbers for that ZIP code.
-- Payment Center (ssa-pc-phone, ssa-pc-fax): Use the claimant's age and SSN to determine the correct Payment Center. If directories are uploaded, use them. Otherwise, use Google Search or your knowledge of SSN routing rules to find the correct PC phone and fax numbers.
+You MUST look up the correct Field Office (FO) and Payment Center (PC) name, phone and fax numbers using the extracted information and put them in their respective fields:
+- Field Office (ssa-fo-name, ssa-fo-phone, ssa-fo-fax): Use the claimant's ZIP code to find the local FO name, phone and fax numbers. If directories are uploaded, use them. Otherwise, use Google Search to find the SSA Field Office name, phone and fax numbers for that ZIP code.
+- Payment Center (ssa-pc-name, ssa-pc-phone, ssa-pc-fax): Use the claimant's age and SSN to determine the correct Payment Center. If directories are uploaded, use them. Otherwise, use Google Search or your knowledge of SSN routing rules to find the correct PC name, phone and fax numbers.
 
 CALCULATING BACKPAY FROM PIA & FM:
 If the total gross retroactive backpay amounts are not explicitly stated, you MUST calculate them using the Primary Insurance Amount (PIA) and Family Maximum (FM):
@@ -473,20 +489,22 @@ If the total gross retroactive backpay amounts are not explicitly stated, you MU
 2. Total monthly auxiliary pool = (FM - PIA) (extract FM to "t2-fm").
 3. Determine payable months from Date of Entitlement (DOE) to Notice date.
 4. "t2-gross" = (PIA * payable months).
-5. "aux-retro" = ((FM - PIA) * payable months) if there are eligible dependents.
+5. "aux-retro" = ((FM - PIA) * payable months) if there are eligible dependents (extract number of children to "aux-num-children").
 6. "t16-gross" = (SSI Monthly * payable months) if SSI Monthly is available.
 
 SELECT FIELD EXACT VALUES:
   "claim-type": "T2 Only" | "T16 Only" | "Concurrent"
+  "stage-approved": "Initial" | "Recon" | "Hearing" | "AC" | "Federal"
   "fee-status": "Approved" | "Denied"
   "fee-petition": "No" | "Yes"
   "perc-marital": "Single" | "Married" | "Separated" | "Divorced" | "Widowed"
   "perc-pah": "No" | "Yes"
   "perc-la-type": "A (Own household)" | "B (Another's household)" | "C (Child under 18)" | "D (Institution)" | "Transient"
   "perc-inheritance": "No" | "Yes"
+  "perc-wc-after-aod": "No" | "Yes"
 
 FIELD ID MAP:
-"claim-type", "cl-first", "cl-middle", "cl-last", "cl-ssn", "cl-dob", "cl-phone", "cl-address", "cl-csz", "cl-pob", "cl-mother", "cl-father", "ssa-fo-phone", "ssa-fo-fax", "ssa-pc-phone", "ssa-pc-fax", "fee-status", "fee-petition", "time-del", "reason-fee-denied", "date-petition-sent", "date-petition-app", "petition-amount", "t2-filing", "t2-aod", "t2-eod", "t2-doe", "t2-dli", "t2-pia", "t2-fm", "t2-retro-months", "t2-gross", "t2-fee-due", "t2-fee-paid", "wc-offset", "windfall-offset", "t2-wc-start", "t2-wc-stop", "t2-wc-monthly", "t2-wc-settlement", "t2-wc-left", "t2-wc-spent", "perc-marital", "perc-children", "perc-pah", "perc-family-details", "perc-la-type", "perc-expenses-total", "perc-expenses-claimant", "perc-la-changes", "res-cash", "res-bank-high", "res-bank-current", "res-vehicles", "res-other", "inc-earned", "inc-spouse", "perc-ltd", "perc-va", "perc-other-unearned", "perc-wc-start", "perc-wc-stop", "perc-wc-monthly", "perc-wc-settlement", "perc-wc-left", "perc-wc-spent", "perc-inheritance", "perc-inh-date", "perc-inh-amount", "perc-inh-left", "perc-inh-spent", "t16-pfd", "t16-eod", "t16-doe", "t16-retro-months", "t16-gross", "t16-state-repay", "t16-fee-due", "t16-fee-paid", "aux-children", "aux-num-children", "aux-retro", "aux-fee-due", "aux-fee-paid", "cdr-cease", "cdr-eod", "cdr-doe", "cdr-retro", "notice-date"`
+"claim-type", "stage-approved", "cl-first", "cl-middle", "cl-last", "cl-ssn", "cl-dob", "cl-phone", "cl-address", "cl-csz", "cl-pob", "cl-mother", "cl-father", "ssa-fo-name", "ssa-fo-phone", "ssa-fo-fax", "ssa-pc-name", "ssa-pc-phone", "ssa-pc-fax", "fee-status", "fee-petition", "time-del", "reason-fee-denied", "date-petition-sent", "date-petition-app", "petition-amount", "t2-filing", "t2-aod", "t2-eod", "t2-doe", "t2-dli", "t2-pia", "t2-fm", "t2-retro-months", "t2-gross", "t2-fee-due", "t2-fee-paid", "wc-offset", "windfall-offset", "t2-wc-start", "t2-wc-stop", "t2-wc-monthly", "t2-wc-settlement", "t2-wc-left", "t2-wc-spent", "perc-marital", "perc-children", "perc-pah", "perc-family-details", "perc-la-type", "perc-expenses-total", "perc-expenses-claimant", "perc-la-changes", "res-cash", "res-bank-high", "res-bank-current", "res-vehicles", "res-other", "inc-earned", "inc-spouse", "perc-ltd", "perc-va", "perc-other-unearned", "perc-wc-start", "perc-wc-stop", "perc-wc-monthly", "perc-wc-settlement", "perc-wc-left", "perc-wc-spent", "perc-inheritance", "perc-inh-date", "perc-inh-amount", "perc-inh-left", "perc-inh-spent", "perc-wc-after-aod", "t16-pfd", "t16-eod", "t16-doe", "t16-retro-months", "t16-gross", "t16-state-repay", "t16-fee-due", "t16-fee-paid", "aux-children", "aux-num-children", "aux-retro", "aux-fee-due", "aux-fee-paid", "cdr-cease", "cdr-eod", "cdr-doe", "cdr-retro", "notice-date"`
       });
 
       const response = await ai.models.generateContent({
@@ -806,6 +824,11 @@ FIELD ID MAP:
                   <div className="mt-8 pt-6 border-t border-slate-200">
                     <h3 className="text-sm font-medium text-slate-700 mb-3">Notes</h3>
                     <div className="flex flex-col gap-3">
+                      {data[`${activeSection?.id}-notes`] && (
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-md text-sm whitespace-pre-wrap text-slate-700">
+                          {data[`${activeSection?.id}-notes`]}
+                        </div>
+                      )}
                       <textarea
                         value={currentNote}
                         onChange={(e) => setCurrentNote(e.target.value)}
