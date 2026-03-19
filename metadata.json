@@ -1,0 +1,5 @@
+{
+  "name": "SSD Benefits Calculator",
+  "description": "Interactive app to calculate past due benefits for SSD T2, T16, and Concurrent claims.",
+  "requestFramePermissions": []
+}
