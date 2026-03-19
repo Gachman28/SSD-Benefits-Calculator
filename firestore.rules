@@ -81,6 +81,7 @@ service cloud.firestore {
              isValidOptionalString('office-notes', 0, 100000) &&
              isValidOptionalString('t16-notes', 0, 100000) &&
              isValidOptionalString('perc-family-details', 0, 100000) &&
+             isValidOptionalString('reps-list', 0, 100000) &&
              isValidOptionalString('claim-type', 0, 1000) &&
              isValidOptionalString('cl-first', 0, 1000) &&
              isValidOptionalString('cl-last', 0, 1000) &&

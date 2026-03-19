@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Calculator, Upload, FileText, User, DollarSign, Calendar, Info, AlertCircle, Loader2, Save } from 'lucide-react';
+import { Calculator, Upload, FileText, User, DollarSign, Calendar, Info, AlertCircle, Loader2, Save, Trash2 } from 'lucide-react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { auth, db, signInWithGoogle, logOut, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { collection, doc, setDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { ErrorBoundary } from 'react-error-boundary';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -77,6 +77,7 @@ const SECTIONS: { id: string; title: string; icon: React.ElementType; fields: Fi
       { id: 't2-fee-paid', label: 'T2 Fee Paid', type: 'number', prefix: '$' },
       { id: 't16-fee-due', label: 'T16 Fee Due', type: 'number', prefix: '$', readOnly: true },
       { id: 't16-fee-paid', label: 'T16 Fee Paid', type: 'number', prefix: '$' },
+      { id: 'reps-list', label: 'Representatives (Name & Rep ID)', type: 'textarea' },
       { id: 'aux-children', label: 'Aux Children', type: 'text' },
       { id: 'aux-num-children', label: 'Num Children', type: 'number' },
       { id: 'aux-retro', label: 'Aux Retro', type: 'number', prefix: '$', readOnly: true },
@@ -177,6 +178,7 @@ function App() {
   const [currentCaseId, setCurrentCaseId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showLoadModal, setShowLoadModal] = useState(false);
+  const [caseToDelete, setCaseToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -575,6 +577,11 @@ FIELD ID MAP:
                     {data['aux-retro'] ? `$${data['aux-retro']}` : '$0.00'}
                   </p>
                 </div>
+                {data['fee-status'] !== 'Approved' && (
+                  <div className="bg-red-50 px-3 py-1 rounded border border-red-200 flex items-center">
+                    <span className="text-red-600 font-bold text-sm">Fee Petition Needed</span>
+                  </div>
+                )}
               </div>
             </div>
             <div className="bg-indigo-50 px-4 py-1.5 rounded-md border border-indigo-100 flex items-center gap-3">
@@ -659,22 +666,33 @@ FIELD ID MAP:
                 <p className="text-slate-500 text-sm text-center py-8">No saved cases found.</p>
               ) : (
                 savedCases.map(c => (
-                  <button
-                    key={c.id}
-                    onClick={() => {
-                      setData(c);
-                      setCurrentCaseId(c.id);
-                      setShowLoadModal(false);
-                    }}
-                    className="w-full text-left px-4 py-3 rounded-lg border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
-                  >
-                    <div className="font-medium text-slate-900">
-                      {c['cl-first'] || 'Unknown'} {c['cl-last'] || 'Claimant'} {c['cl-ssn'] ? `(${c['cl-ssn']})` : ''}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      Updated: {new Date(c.updatedAt).toLocaleDateString()}
-                    </div>
-                  </button>
+                  <div key={c.id} className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setData(c);
+                        setCurrentCaseId(c.id);
+                        setShowLoadModal(false);
+                      }}
+                      className="flex-1 text-left px-4 py-3 rounded-lg border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
+                    >
+                      <div className="font-medium text-slate-900">
+                        {c['cl-first'] || 'Unknown'} {c['cl-last'] || 'Claimant'} {c['cl-ssn'] ? `(${c['cl-ssn']})` : ''}
+                      </div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        Updated: {new Date(c.updatedAt).toLocaleDateString()}
+                      </div>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCaseToDelete(c.id);
+                      }}
+                      className="p-3 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg border border-transparent transition-colors"
+                      title="Delete Case"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
                 ))
               )}
             </div>
@@ -684,6 +702,43 @@ FIELD ID MAP:
                 className="px-4 py-2 text-slate-600 hover:bg-slate-200 bg-slate-100 rounded-md font-medium transition-colors"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {caseToDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">Delete Case?</h3>
+            <p className="text-slate-600 mb-6 text-sm">Are you sure you want to delete this case? This action cannot be undone.</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setCaseToDelete(null)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-md font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!user) return;
+                  try {
+                    await deleteDoc(doc(db, `users/${user.uid}/cases`, caseToDelete));
+                    if (currentCaseId === caseToDelete) {
+                      setData(INITIAL_STATE);
+                      setCurrentCaseId(null);
+                    }
+                  } catch (error) {
+                    handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/cases/${caseToDelete}`);
+                  } finally {
+                    setCaseToDelete(null);
+                  }
+                }}
+                className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-md font-medium transition-colors"
+              >
+                Delete
               </button>
             </div>
           </div>

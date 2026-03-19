@@ -96,7 +96,8 @@
         "cdr-eod": { "type": "string" },
         "cdr-doe": { "type": "string" },
         "cdr-retro": { "type": "string" },
-        "notice-date": { "type": "string" }
+        "notice-date": { "type": "string" },
+        "reps-list": { "type": "string" }
       },
       "required": ["userId", "createdAt", "updatedAt"]
     }
